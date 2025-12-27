@@ -1,0 +1,133 @@
+import { z } from 'zod';
+import { insertThemeParkSchema, insertReviewSchema, insertTripSchema, themeParks, reviews, trips } from './schema';
+
+// Re-export schemas for frontend
+export { insertThemeParkSchema, insertReviewSchema, insertTripSchema };
+
+export const errorSchemas = {
+  validation: z.object({
+    message: z.string(),
+    field: z.string().optional(),
+  }),
+  notFound: z.object({
+    message: z.string(),
+  }),
+  internal: z.object({
+    message: z.string(),
+  }),
+};
+
+export const api = {
+  parks: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/theme-parks',
+      responses: {
+        200: z.array(z.custom<typeof themeParks.$inferSelect>()),
+      },
+    },
+    get: {
+      method: 'GET' as const,
+      path: '/api/theme-parks/:id',
+      responses: {
+        200: z.custom<typeof themeParks.$inferSelect>(),
+        404: errorSchemas.notFound,
+      },
+    },
+  },
+  reviews: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/theme-parks/:parkId/reviews',
+      responses: {
+        200: z.array(z.custom<typeof reviews.$inferSelect & { user: { firstName: string | null, lastName: string | null } }>()), // Include user info
+      },
+    },
+    create: {
+      method: 'POST' as const,
+      path: '/api/reviews',
+      input: insertReviewSchema,
+      responses: {
+        201: z.custom<typeof reviews.$inferSelect>(),
+        400: errorSchemas.validation,
+        401: z.object({ message: z.string() }),
+      },
+    },
+  },
+  trips: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/trips',
+      responses: {
+        200: z.array(z.custom<typeof trips.$inferSelect>()),
+        401: z.object({ message: z.string() }),
+      },
+    },
+    create: {
+      method: 'POST' as const,
+      path: '/api/trips',
+      input: insertTripSchema,
+      responses: {
+        201: z.custom<typeof trips.$inferSelect>(),
+        400: errorSchemas.validation,
+        401: z.object({ message: z.string() }),
+      },
+    },
+    estimate: {
+      method: 'POST' as const,
+      path: '/api/trips/estimate',
+      input: z.object({
+        destination: z.string(),
+        durationDays: z.number(),
+        travelers: z.number(),
+        budgetLevel: z.enum(['low', 'medium', 'high']),
+      }),
+      responses: {
+        200: z.object({
+          estimatedCost: z.number(),
+          breakdown: z.string(),
+          tips: z.string(),
+        }),
+      },
+    },
+  },
+  ai: {
+    recommendations: {
+      method: 'POST' as const,
+      path: '/api/ai/recommendations',
+      input: z.object({
+        location: z.string(),
+        interests: z.string(),
+      }),
+      responses: {
+        200: z.object({
+          recommendations: z.string(), // AI generated text/markdown
+        }),
+      },
+    },
+    tips: {
+      method: 'POST' as const,
+      path: '/api/ai/tips',
+      input: z.object({
+        location: z.string(),
+      }),
+      responses: {
+        200: z.object({
+          tips: z.string(),
+        }),
+      },
+    },
+  }
+};
+
+export function buildUrl(path: string, params?: Record<string, string | number>): string {
+  let url = path;
+  if (params) {
+    Object.entries(params).forEach(([key, value]) => {
+      if (url.includes(`:${key}`)) {
+        url = url.replace(`:${key}`, String(value));
+      }
+    });
+  }
+  return url;
+}

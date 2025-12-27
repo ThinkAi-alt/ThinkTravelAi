@@ -1,0 +1,77 @@
+import { pgTable, text, serial, integer, boolean, timestamp, doublePrecision, jsonb } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod";
+import { relations } from "drizzle-orm";
+
+// Export integration schemas
+export * from "./models/auth";
+export * from "./models/chat";
+
+import { users } from "./models/auth";
+
+// App-specific tables
+
+export const themeParks = pgTable("theme_parks", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description").notNull(),
+  latitude: doublePrecision("latitude").notNull(),
+  longitude: doublePrecision("longitude").notNull(),
+  website: text("website").notNull(),
+  imageUrl: text("image_url"),
+  location: text("location").notNull(), // e.g. "Orlando, FL"
+});
+
+export const reviews = pgTable("reviews", {
+  id: serial("id").primaryKey(),
+  parkId: integer("park_id").notNull(), // References themeParks.id (manual relation)
+  userId: text("user_id").notNull(), // References users.id (from auth schema)
+  rating: integer("rating").notNull(), // 1-5
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const trips = pgTable("trips", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull(), // References users.id
+  destination: text("destination").notNull(),
+  startDate: timestamp("start_date").notNull(),
+  endDate: timestamp("end_date").notNull(),
+  budget: integer("budget").notNull(),
+  estimatedCost: integer("estimated_cost"), // AI calculated
+  notes: text("notes"),
+});
+
+// Zod Schemas
+export const insertThemeParkSchema = createInsertSchema(themeParks).omit({ id: true });
+export const insertReviewSchema = createInsertSchema(reviews).omit({ id: true, createdAt: true });
+export const insertTripSchema = createInsertSchema(trips).omit({ id: true, estimatedCost: true });
+
+// Types
+export type ThemePark = typeof themeParks.$inferSelect;
+export type InsertThemePark = z.infer<typeof insertThemeParkSchema>;
+
+export type Review = typeof reviews.$inferSelect;
+export type InsertReview = z.infer<typeof insertReviewSchema>;
+
+export type Trip = typeof trips.$inferSelect;
+export type InsertTrip = z.infer<typeof insertTripSchema>;
+
+// Relations (optional, for type inference if needed, but Drizzle relations are often separate)
+export const reviewsRelations = relations(reviews, ({ one }) => ({
+  park: one(themeParks, {
+    fields: [reviews.parkId],
+    references: [themeParks.id],
+  }),
+  user: one(users, {
+    fields: [reviews.userId],
+    references: [users.id],
+  }),
+}));
+
+export const tripsRelations = relations(trips, ({ one }) => ({
+  user: one(users, {
+    fields: [trips.userId],
+    references: [users.id],
+  }),
+}));

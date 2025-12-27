@@ -1,0 +1,82 @@
+import { db } from "./db";
+import {
+  themeParks, reviews, trips, users,
+  type ThemePark, type InsertThemePark,
+  type Review, type InsertReview,
+  type Trip, type InsertTrip,
+  type User
+} from "@shared/schema";
+import { eq, desc } from "drizzle-orm";
+
+export interface IStorage {
+  // Theme Parks
+  getThemeParks(): Promise<ThemePark[]>;
+  getThemePark(id: number): Promise<ThemePark | undefined>;
+  createThemePark(park: InsertThemePark): Promise<ThemePark>;
+
+  // Reviews
+  getReviewsByParkId(parkId: number): Promise<(Review & { user: { firstName: string | null, lastName: string | null } })[]>;
+  createReview(review: InsertReview): Promise<Review>;
+
+  // Trips
+  getTripsByUserId(userId: string): Promise<Trip[]>;
+  createTrip(trip: InsertTrip): Promise<Trip>;
+
+  // User helper
+  getUser(id: string): Promise<User | undefined>;
+}
+
+export class DatabaseStorage implements IStorage {
+  async getThemeParks(): Promise<ThemePark[]> {
+    return await db.select().from(themeParks);
+  }
+
+  async getThemePark(id: number): Promise<ThemePark | undefined> {
+    const [park] = await db.select().from(themeParks).where(eq(themeParks.id, id));
+    return park;
+  }
+
+  async createThemePark(park: InsertThemePark): Promise<ThemePark> {
+    const [newPark] = await db.insert(themeParks).values(park).returning();
+    return newPark;
+  }
+
+  async getReviewsByParkId(parkId: number): Promise<(Review & { user: { firstName: string | null, lastName: string | null } })[]> {
+    // Join with users to get name
+    const result = await db
+      .select({
+        review: reviews,
+        user: {
+          firstName: users.firstName,
+          lastName: users.lastName,
+        },
+      })
+      .from(reviews)
+      .innerJoin(users, eq(reviews.userId, users.id))
+      .where(eq(reviews.parkId, parkId))
+      .orderBy(desc(reviews.createdAt));
+
+    return result.map(r => ({ ...r.review, user: r.user }));
+  }
+
+  async createReview(review: InsertReview): Promise<Review> {
+    const [newReview] = await db.insert(reviews).values(review).returning();
+    return newReview;
+  }
+
+  async getTripsByUserId(userId: string): Promise<Trip[]> {
+    return await db.select().from(trips).where(eq(trips.userId, userId));
+  }
+
+  async createTrip(trip: InsertTrip): Promise<Trip> {
+    const [newTrip] = await db.insert(trips).values(trip).returning();
+    return newTrip;
+  }
+
+  async getUser(id: string): Promise<User | undefined> {
+     const [user] = await db.select().from(users).where(eq(users.id, id));
+     return user;
+  }
+}
+
+export const storage = new DatabaseStorage();

@@ -1,0 +1,192 @@
+import type { Express } from "express";
+import { createServer, type Server } from "http";
+import { storage } from "./storage";
+import { api } from "@shared/routes";
+import { z } from "zod";
+import OpenAI from "openai";
+
+// Integrations
+import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
+import { registerChatRoutes } from "./replit_integrations/chat";
+import { registerImageRoutes } from "./replit_integrations/image";
+
+const openai = new OpenAI({
+  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+});
+
+export async function registerRoutes(
+  httpServer: Server,
+  app: Express
+): Promise<Server> {
+  
+  // 1. Setup Auth
+  await setupAuth(app);
+  registerAuthRoutes(app);
+
+  // 2. Setup AI Integrations
+  registerChatRoutes(app);
+  registerImageRoutes(app);
+
+  // 3. App Routes
+
+  // Theme Parks
+  app.get(api.parks.list.path, async (req, res) => {
+    const parks = await storage.getThemeParks();
+    res.json(parks);
+  });
+
+  app.get(api.parks.get.path, async (req, res) => {
+    const park = await storage.getThemePark(Number(req.params.id));
+    if (!park) return res.status(404).json({ message: "Park not found" });
+    res.json(park);
+  });
+
+  // Reviews
+  app.get(api.reviews.list.path, async (req, res) => {
+    const reviews = await storage.getReviewsByParkId(Number(req.params.parkId));
+    res.json(reviews);
+  });
+
+  app.post(api.reviews.create.path, isAuthenticated, async (req, res) => {
+    try {
+      const input = api.reviews.create.input.parse(req.body);
+      // Ensure user is creating review for themselves
+      const userId = (req.user as any).claims.sub;
+      if (input.userId !== userId) {
+        return res.status(400).json({ message: "User ID mismatch" });
+      }
+      const review = await storage.createReview(input);
+      res.status(201).json(review);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0].message });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Trips
+  app.get(api.trips.list.path, isAuthenticated, async (req, res) => {
+    const userId = (req.user as any).claims.sub;
+    const trips = await storage.getTripsByUserId(userId);
+    res.json(trips);
+  });
+
+  app.post(api.trips.create.path, isAuthenticated, async (req, res) => {
+    try {
+      const input = api.trips.create.input.parse(req.body);
+      const userId = (req.user as any).claims.sub;
+      if (input.userId !== userId) {
+         return res.status(400).json({ message: "User ID mismatch" });
+      }
+      const trip = await storage.createTrip(input);
+      res.status(201).json(trip);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0].message });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // AI Trip Estimate
+  app.post(api.trips.estimate.path, async (req, res) => {
+    try {
+      const { destination, durationDays, travelers, budgetLevel } = req.body;
+      
+      const prompt = `Estimate the cost for a trip to ${destination} for ${durationDays} days for ${travelers} people with a ${budgetLevel} budget. 
+      Provide:
+      1. Estimated total cost (number).
+      2. Breakdown (text).
+      3. Tips (text).
+      Return JSON format: { "estimatedCost": number, "breakdown": "string", "tips": "string" }`;
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-5.1",
+        messages: [{ role: "user", content: prompt }],
+        response_format: { type: "json_object" },
+      });
+
+      const result = JSON.parse(response.choices[0]?.message?.content || "{}");
+      res.json(result);
+    } catch (error) {
+      console.error("AI Estimate Error:", error);
+      res.status(500).json({ message: "Failed to generate estimate" });
+    }
+  });
+
+  // AI Recommendations
+  app.post(api.ai.recommendations.path, async (req, res) => {
+     try {
+       const { location, interests } = req.body;
+       const prompt = `Give travel recommendations for ${location} based on these interests: ${interests}. Format as markdown.`;
+       
+       const response = await openai.chat.completions.create({
+         model: "gpt-5.1",
+         messages: [{ role: "user", content: prompt }],
+       });
+
+       res.json({ recommendations: response.choices[0]?.message?.content || "" });
+     } catch (error) {
+       console.error("AI Recommendations Error:", error);
+       res.status(500).json({ message: "Failed to generate recommendations" });
+     }
+  });
+  
+  // AI Tips
+  app.post(api.ai.tips.path, async (req, res) => {
+     try {
+       const { location } = req.body;
+       const prompt = `Give 5 essential travel tips for visiting ${location}. Format as markdown.`;
+       
+       const response = await openai.chat.completions.create({
+         model: "gpt-5.1",
+         messages: [{ role: "user", content: prompt }],
+       });
+
+       res.json({ tips: response.choices[0]?.message?.content || "" });
+     } catch (error) {
+       console.error("AI Tips Error:", error);
+       res.status(500).json({ message: "Failed to generate tips" });
+     }
+  });
+
+  // Seed Data
+  await seedDatabase();
+
+  return httpServer;
+}
+
+async function seedDatabase() {
+  const parks = await storage.getThemeParks();
+  if (parks.length === 0) {
+    await storage.createThemePark({
+      name: "Walt Disney World Resort",
+      description: "The world's most visited vacation resort, featuring four theme parks.",
+      location: "Orlando, FL",
+      latitude: 28.3852,
+      longitude: -81.5639,
+      website: "https://disneyworld.disney.go.com/",
+      imageUrl: "https://images.unsplash.com/photo-1596204557973-c603b5550a22?auto=format&fit=crop&q=80&w=800",
+    });
+    await storage.createThemePark({
+      name: "Universal Orlando Resort",
+      description: "A world-class destination featuring two amazing theme parks.",
+      location: "Orlando, FL",
+      latitude: 28.4743,
+      longitude: -81.4678,
+      website: "https://www.universalorlando.com/",
+      imageUrl: "https://images.unsplash.com/photo-1521735167448-6a3621df7e69?auto=format&fit=crop&q=80&w=800",
+    });
+    await storage.createThemePark({
+      name: "Disneyland Park",
+      description: "The original Disney theme park in California.",
+      location: "Anaheim, CA",
+      latitude: 33.8121,
+      longitude: -117.9190,
+      website: "https://disneyland.disney.go.com/",
+      imageUrl: "https://images.unsplash.com/photo-1541364983171-a8ba01e95cfc?auto=format&fit=crop&q=80&w=800",
+    });
+  }
+}
